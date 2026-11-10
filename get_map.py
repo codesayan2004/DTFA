@@ -19,9 +19,9 @@ if __name__ == "__main__":
 
     map_vis         = False
 
-    VOCdevkit_path = '/hy-tmp/DTFA-main/datasets/voc_fog/test'
+    VOCdevkit_path = os.environ.get('TEST_DIR', 'datasets/voc_fog/test')
 
-    map_out_path    = 'logs/fog_map_out'
+    map_out_path    = os.environ.get('MAP_OUT', 'logs/fog_map_out')
 
     #image_ids = open(os.path.join(VOCdevkit_path, "VOC2007/ImageSets/Main/test.txt")).read().strip().split()
     image_ids = open(os.path.join(VOCdevkit_path, "test.txt")).read().strip().split()

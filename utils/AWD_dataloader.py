@@ -1,5 +1,4 @@
 from random import sample, shuffle
-from turtle import clear
 
 import cv2
 import numpy as np

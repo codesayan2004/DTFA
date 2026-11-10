@@ -19,7 +19,7 @@ if __name__ == "__main__":
 
     map_vis         = False
 
-    VOCdevkit_path = 'datasets/RTTS'
+    VOCdevkit_path = os.environ.get('TEST_DIR', 'datasets/RTTS')
 
     map_out_path    = 'logs/RTTS_map_out'
 

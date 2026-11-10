@@ -3,13 +3,16 @@ from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
 from utils.utils import get_lr
+import os
 import numpy as np
 from PIL import Image
 
 
 def fit_one_epoch(model_train, model, yolo_loss, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen,
                   gen_val, Epoch, cuda, save_period, res_model, det_model, R_criterion, D_criterion,
-                 ):
+                  dbt=None):
+    # dbt: optional utils.DBT.loss.DBTLoss (Dynamic Bridging Tuning). When given, it replaces the two
+    # fixed-weight AFB terms (R_criterion / D_criterion are then unused and may be None).
     loss = 0
     val_loss = 0
     loss_s = 0
@@ -18,8 +21,12 @@ def fit_one_epoch(model_train, model, yolo_loss, loss_history, optimizer, epoch,
     D_Consistancy_loss = 0
 
     model_train.train()
-    R_criterion.train()
-    D_criterion.train()
+    if dbt is not None:
+        dbt.train()
+        dbt_sums = {}
+    else:
+        R_criterion.train()
+        D_criterion.train()
     print('Start Train')
     with tqdm(total=epoch_step, desc=f'Epoch {epoch + 1}/{Epoch}', postfix=dict, mininterval=0.3) as pbar:
         for iteration, batch in enumerate(gen):
@@ -38,6 +45,8 @@ def fit_one_epoch(model_train, model, yolo_loss, loss_history, optimizer, epoch,
                     clearimgs = torch.from_numpy(clearimgs).type(torch.FloatTensor)
 
             optimizer.zero_grad()
+            if dbt is not None:
+                dbt.optimizer.zero_grad()
 
             # outputs         = model_train(images)
             outputs = model_train(images)
@@ -57,23 +66,44 @@ def fit_one_epoch(model_train, model, yolo_loss, loss_history, optimizer, epoch,
 
             loss_save = loss_value
 
-            R_loss_consistancy = R_criterion((outputs[1][1],outputs[1][0]), (res_out[1],res_out[0]))
-            D_loss_consistancy = D_criterion((outputs[1][1],outputs[1][0]), (det_out[1],det_out[0]))
-            loss_value = 0.2 * loss_value + R_loss_consistancy + D_loss_consistancy
+            if dbt is not None:
+                out = dbt((outputs[1][1], outputs[1][0]), (res_out[1], res_out[0]), (det_out[1], det_out[0]),
+                          images, clearimgs)
+                # logged in the R/D slots: R = alignment to the fused teacher, D = gate regularisers
+                R_loss_consistancy = dbt.lam * out['align']
+                D_loss_consistancy = dbt.eta * out['gate'] + dbt.gamma * out['reg'] + dbt.mu * out['sev']
+                loss_value = 0.2 * loss_value + out['loss']
+                for k, v in list(out['stats'].items()) + [('align', out['align'].item()), ('gate', out['gate'].item()),
+                                                          ('reg', out['reg'].item()), ('sev', out['sev'].item())]:
+                    dbt_sums[k] = dbt_sums.get(k, 0.0) + v
+            else:
+                R_loss_consistancy = R_criterion((outputs[1][1],outputs[1][0]), (res_out[1],res_out[0]))
+                D_loss_consistancy = D_criterion((outputs[1][1],outputs[1][0]), (det_out[1],det_out[0]))
+                loss_value = 0.2 * loss_value + R_loss_consistancy + D_loss_consistancy
 
             loss_value.backward()
             optimizer.step()
+            if dbt is not None:
+                dbt.optimizer.step()
 
             loss += loss_value.item()
             R_Consistancy_loss += R_loss_consistancy.item()
             D_Consistancy_loss += D_loss_consistancy.item()
             loss_s += loss_save.item()
 
-            pbar.set_postfix(**{'loss': loss / (iteration + 1),
-                                'R-Consistancy_loss': R_Consistancy_loss / (iteration + 1),
-                                'D-Consistancy_loss': D_Consistancy_loss / (iteration + 1),
-                                'Detection loss': loss_s / (iteration + 1),
-                                'lr': get_lr(optimizer)})
+            if dbt is not None:
+                pbar.set_postfix(**{'loss': loss / (iteration + 1),
+                                    'DBT-align': R_Consistancy_loss / (iteration + 1),
+                                    'DBT-aux': D_Consistancy_loss / (iteration + 1),
+                                    'Detection loss': loss_s / (iteration + 1),
+                                    'alpha(IRT)': dbt_sums['alpha_mean'] / (iteration + 1),
+                                    'lr': get_lr(optimizer)})
+            else:
+                pbar.set_postfix(**{'loss': loss / (iteration + 1),
+                                    'R-Consistancy_loss': R_Consistancy_loss / (iteration + 1),
+                                    'D-Consistancy_loss': D_Consistancy_loss / (iteration + 1),
+                                    'Detection loss': loss_s / (iteration + 1),
+                                    'lr': get_lr(optimizer)})
             pbar.update(1)
 
     print('Finish Train')
@@ -109,7 +139,25 @@ def fit_one_epoch(model_train, model, yolo_loss, loss_history, optimizer, epoch,
                              D_Consistancy_loss / epoch_step, loss_s / epoch_step)
     print('Epoch:' + str(epoch + 1) + '/' + str(Epoch))
     print('Total Loss: %.3f || Val Loss: %.3f ' % (loss / epoch_step, val_loss / epoch_step_val))
+    if dbt is not None:
+        stats = {k: v / epoch_step for k, v in dbt_sums.items()}
+        msg = ', '.join('%s=%.4f' % (k, v) for k, v in stats.items())
+        if 'beta' not in stats:
+            msg += ', beta=%.4f' % dbt.beta.item()
+        print('DBT: ' + msg)
+        path = os.path.join('logs', 'dbt_stats.csv')
+        keys = ['alpha_mean', 'alpha_std', 'W_mean', 'corr_alpha_W', 'align', 'gate', 'reg', 'sev']
+        new = not os.path.exists(path)
+        with open(path, 'a') as f:
+            if new:
+                f.write('epoch,' + ','.join(keys) + ',beta,det_loss,val_loss\n')
+            f.write('%d,' % (epoch + 1) + ','.join('%.6f' % stats.get(k, float('nan')) for k in keys)
+                    + ',%.6f,%.6f,%.6f\n' % (dbt.beta.item(), loss_s / epoch_step, val_loss / epoch_step_val))
+    # (when stopping early with STOP_EPOCH, choose a multiple of save_period so that epoch is saved)
     if (epoch + 1) % save_period == 0 or epoch + 1 == Epoch:
         torch.save(model.state_dict(),
                    'logs/ep%03d-loss%.3f-val_loss%.3f.pth' % (epoch + 1, loss / epoch_step, val_loss / epoch_step_val))
+        if dbt is not None:  # gate / severity-estimator state, needed to resume a DBT run
+            torch.save({'model': dbt.state_dict(), 'optimizer': dbt.optimizer.state_dict(), 'config': dbt.config},
+                       'logs/dbt_ep%03d.pth' % (epoch + 1))
 

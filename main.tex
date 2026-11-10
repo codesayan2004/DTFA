@@ -1,0 +1,197 @@
+
+\documentclass[8pt,a4paper]{article}
+
+% ------------------------------------------------
+% Packages
+% ------------------------------------------------
+\usepackage[
+    top=0.15in,
+    bottom=0.15in,
+    left=0.55in,
+    right=0.55in
+]{geometry}
+
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{titlesec}
+
+% ------------------------------------------------
+% Formatting
+% ------------------------------------------------
+
+% Black-and-white hyperlinks
+\hypersetup{
+    colorlinks=true,
+    allcolors=black
+}
+
+% Reduce line spacing
+\linespread{0.52}
+
+% Reduce paragraph spacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1pt}
+
+% Reduce section heading spacing
+\titlespacing*{\subsection}
+{0pt}{7pt}{3pt}
+
+% Table formatting
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.05}
+
+\captionsetup[table]{
+    font=small,
+    labelfont=bf,
+    position=top,
+    skip=3pt
+}
+
+% Notation
+\newcommand{\FI}{\tilde{F}_{\mathrm{IRT}}}
+\newcommand{\FP}{\tilde{F}_{\mathrm{SPT}}}
+\newcommand{\FS}{F_{S}}
+\newcommand{\sg}{\operatorname{sg}}
+
+% ------------------------------------------------
+% Document
+% ------------------------------------------------
+\begin{document}
+\thispagestyle{empty}
+
+% ------------------------------------------------
+% Title and Team Information
+% ------------------------------------------------
+\begin{center}
+
+{\large\bfseries
+Dynamic Bridging Tuning: Region-Adaptive Dual-Teacher Fusion\\
+for Adverse-Weather Object Detection}\\[4pt]
+
+\textbf{Team:} SmashMasters
+\quad | \quad
+\textbf{Members:}
+Rohit Sah, Sayan Mandal, Sachin Kumar Tanti, Gaurav Singh, Karan\\[3pt]
+
+\textbf{GitHub:}
+\url{https://github.com/username/project-repo}
+\quad | \quad
+\textbf{Assigned paper:} Hu \emph{et al.}, ``A lightweight framework for robust object detection in adverse weather based on dual-teacher feature alignment'' (DTFA), \emph{Neurocomputing} 671, 2026.
+
+\end{center}
+
+\vspace{-5pt}
+
+% ------------------------------------------------
+\subsection*{I. Abstract (Maximum 100 Words)}
+% ------------------------------------------------
+Detectors degrade sharply in fog, rain and snow because weather corrupts the low-level evidence on which semantics are built. Restoring the image first, or jointly optimising restoration and detection, couples a pixel-fidelity objective to a semantic one and leaves a task gap. DTFA instead distils \emph{clear-image features} into an adverse-weather student from two frozen teachers: a reconstruction teacher (IRT, weather-invariant structure) and a detection teacher (SPT, task semantics), via Adaptive Feature Bridging, with zero inference overhead. We interpret DTFA as dual-teacher feature distillation that, however, trusts both teachers equally at every image location.
+
+% ------------------------------------------------
+\subsection*{II. Proposed Novelty \& Technical Contribution}
+% ------------------------------------------------
+\begin{enumerate}
+    \item \textbf{Novelty: Dynamic Bridging Tuning (DBT).} DTFA aligns the student with IRT and SPT through two independent bridges with a fixed $1{:}1$ weight everywhere. DBT replaces this with a learned, \emph{spatially varying} gate $\alpha(x,y)\in[0,1]$ that decides at each location how much to trust IRT (and $1-\alpha$ for SPT). The gate is conditioned on both bridged teacher features, the student feature, a learned weather-severity map $W$ and a teacher-disagreement map $D$. A learnable severity prior $\beta W$ encodes ``more severe weather $\Rightarrow$ more IRT''.
+    \item \textbf{Type:} a new training-time module (gate, severity estimator) together with an altered distillation loss (reliability-aware fusion of the two teachers into one target, plus gate, entropy and severity terms). The detector architecture is unchanged.
+    \item \textbf{Difference from the baseline:} DTFA minimises $0.2\,\mathcal{L}_{det}+\mathcal{L}_{rc}(\FS,\FI)+\mathcal{L}_{dc}(\FS,\FP)$, i.e.\ two separate targets with constant weights. DBT aligns the student with a single \emph{mixture of teacher features} whose mixing weights vary across regions and images. The gate is used only during training, so the deployed detector, its parameters and its latency are identical to DTFA. An implementation finding also shaped the design: DTFA's alignment operator passes the student through a fixed, randomly initialised generator, which gives a gate no usable signal. DBT therefore trains the gate with a direct alignment loss and its own optimiser (Sec.~III).
+\end{enumerate}
+
+% ------------------------------------------------
+\subsection*{III. Theoretical / Mathematical Justification}
+% ------------------------------------------------
+\textbf{Formulation.} Let $\FS,\FI,\FP\in\mathbb{R}^{C\times H\times W}$ ($C{=}128$, $H{=}W{=}160$) be the student and teacher shallow features after a shared bridge, $I_a$ the adverse image and $I_c$ its clear pair (seen by the teachers only). Then
+\begin{equation}
+W=\sigma\!\big(f_w(I_a)\big),\quad
+D=\frac{\lVert\FI-\FP\rVert_2}{\operatorname{mean}_{xy}\lVert\FI-\FP\rVert_2},\quad
+[z_I,z_S]=g\big([\FI;\FP;\FS;W;D]\big),
+\end{equation}
+\begin{equation}
+r_I=\operatorname{softplus}(z_I+\beta W),\quad r_S=\operatorname{softplus}(z_S),\quad
+\alpha=\frac{r_I}{r_I+r_S+\epsilon},\quad
+F_B=\alpha\odot\FI+(1-\alpha)\odot\FP ,
+\end{equation}
+\begin{equation}
+\mathcal{L}=0.2\,\mathcal{L}_{det}
++\lambda\,\mathcal{L}_{\mathrm{MGD}}\big(\FS,\sg(F_B)\big)
++\eta\,\frac{\lVert\sg(\FS)-F_B\rVert^2}{\lVert\FI-\FP\rVert^2}
++\gamma\Big(1-\tfrac{H(\alpha)}{\log 2}\Big)
++\mu\,\mathrm{BCE}\big(W,W^{*}\big),\qquad
+W^{*}=\operatorname{clip}\!\Big(\tfrac{|I_a-I_c|}{s},0,1\Big).
+\end{equation}
+Here $f_w$ is a small CNN severity estimator. $g$ is a $3{\times}3$/$1{\times}1$ convolutional gate. $\beta$ is a learnable severity prior (initialised at 1). $r_I,r_S\ge0$ are teacher reliabilities. $\sg$ is stop-gradient. $\mathcal{L}_{\mathrm{MGD}}$ is DTFA's masked generative alignment, which trains the student. The normalised alignment term trains the gate. $H(\alpha)$ is the binary entropy, which discourages collapse onto one teacher. $W^{*}$ is a free per-pixel severity pseudo-label from the paired training data. Defaults: $\lambda{=}2$ (DTFA has two alignment terms of weight 1), $\eta{=}1$, $\gamma{=}0.01$, $\mu{=}0.1$, $s{=}0.25$.
+
+\textbf{Why weather severity should shift trust towards IRT.} Under the atmospheric scattering model $I_a=t\,I_c+A(1-t)$ with $t=e^{-\beta_f d}$, the local signal from the scene decays with $t$, while the severity $w=1-t$ grows. As $w\uparrow$, the semantic evidence that SPT-aligned features presuppose becomes less recoverable from the student's input: $r_{SPT}\downarrow$. IRT is trained only to encode the clear scene's structure, so its relative usefulness grows: $r_{IRT}\uparrow$. Hence $w\uparrow\Rightarrow\alpha\uparrow$, which the prior $\beta W$ encodes and the gate can refine. With a fixed $1{:}1$ weight, in heavily degraded regions the student is pushed simultaneously towards a semantic target it cannot reconstruct and a structural one it can, so the gradients conflict.
+
+\textbf{Mixture-of-experts view and what it implies.} $F_B$ is a gated mixture of two experts. Constant fusion ($\alpha\equiv0.5$) is a feasible point of the gate, so the optimum of the gate objective can only be lower than with fixed weights. A lower distillation loss does not by itself guarantee higher mAP. The causal link we claim is therefore \emph{conditional} and testable: a gain should coincide with (a) spatially varying trust ($\operatorname{std}(\alpha)>0$) and (b) a positive correlation between $\alpha$ and $W$. Both are logged every epoch.
+
+\textbf{Why the gate needs its own loss.} If the gate were trained only through $\mathcal{L}_{\mathrm{MGD}}$, its signal would pass through DTFA's fixed random generator, which scrambles which teacher the student resembles. In a controlled test (student $=$ IRT on the left half, SPT on the right) the gate stayed at $\alpha\approx0.50/0.50$. With the normalised direct term and Adam it recovered the split ($\alpha=0.84/0.16$). With the student's SGD learning rate it did not move, hence the separate optimiser.
+
+% ------------------------------------------------
+\subsection*{IV. Comparative Results \& Empirical Evaluation}
+% ------------------------------------------------
+\begin{enumerate}
+    \item \textbf{Setup} (DTFA protocol). VOC-FOG-train (9{,}578 images) and VOC-FOG-test (2{,}129) cover 5 classes (person, bicycle, car, motorbike, bus), at $640{\times}640$ input. The student is YOLOX-s, trained with SGD (batch 8, learning rate $10^{-2}$, cosine schedule) for 100 epochs, with the authors' pre-trained SPT/IRT teachers. Cross-domain testing uses RTTS (4{,}322 real foggy images, same 5 classes, no re-training). Metric: mAP@0.5. DBT changes only the training loss; the gate uses Adam ($10^{-3}$). Our reproduction uses locally synthesised fog (same scattering model) on the 8{,}513 publicly available training images.
+    \item \textbf{Comparison.} Table~\ref{tab:results} lists the baselines \emph{as reported in the DTFA paper} (Tables 2, 7 and 9). The DBT row is a \emph{projection}$^\dagger$, not a measurement. It is derived from the paper's own two-teacher ablation (Table 10): no teachers 76.82, SPT only 79.75 ($+2.93$), IRT only 80.00 ($+3.18$), fixed 1:1 fusion 80.45 ($+3.63$). Fixed fusion keeps only $3.63$ of the $6.11$ points the teachers yield separately, so $2.48$ points are lost to redundancy and to conflicting targets. Region-adaptive trust addresses the conflicting part. We assume DBT recovers about 23\% of the lost points, i.e.\ $+0.58$ mAP (plausible range $+0.3$ to $+0.9$). Per class, the projected gain is largest where DTFA trails the strongest competitor and where thin structures suffer most under fog: bicycle ($71.14$ vs.\ RDMNet $73.41$) and motorbike. It is smallest for near-saturated classes (person, bus). On real fog (RTTS), whose density varies more within an image than in the synthetic data, we project $+0.7$ (range $+0.2$ to $+1.2$).
+    \item \textbf{Takeaway.} The projection is 80.45\,$\rightarrow$\,81.03 mAP on VOC-FOG-test ($+0.58$) and 62.36\,$\rightarrow$\,63.06 on RTTS ($+0.70$). Parameters and FLOPs are exactly unchanged, because DBT exists only at training time. These values must be replaced by measured results before any claim is made. Verified so far: DBT trains end to end, and the gate learns region-dependent trust in a controlled test ($\alpha=0.84$ vs.\ $0.16$).
+\end{enumerate}
+
+% ------------------------------------------------
+% Results Table
+% ------------------------------------------------
+\begin{center}
+
+\captionof{table}{
+Quantitative comparison on VOC-FOG-test (per-class AP and mAP@0.5, \%) and real-world RTTS (mAP@0.5, \%). Baseline rows are reported values from the DTFA paper. $^\dagger$DBT values are \textbf{projections} (Sec.~IV.2), not measured results. Best values in bold. Params/FLOPs refer to the deployed detector at $640{\times}640$; DBT adds a training-only module of 0.56\,M parameters.
+}
+
+\label{tab:results}
+
+\small
+\setlength{\tabcolsep}{3.5pt}
+
+\begin{tabularx}{\linewidth}{
+    @{}X c c c c c c c c c@{}
+}
+
+\toprule
+
+\textbf{Method}
+& \textbf{Person} & \textbf{Bicycle} & \textbf{Car} & \textbf{Motorbike} & \textbf{Bus}
+& \makecell{\textbf{mAP}\\\textbf{VOC-FOG} ($\uparrow$)}
+& \makecell{\textbf{mAP}\\\textbf{RTTS} ($\uparrow$)}
+& \makecell{\textbf{Params}\\(M)}
+& \makecell{\textbf{FLOPs}\\(G $\downarrow$)}
+\\
+
+\midrule
+
+YOLOX-s (fog-trained)
+& 83.28 & 67.67 & 77.75 & 68.91 & 81.70 & 75.86 & 57.95 & 8.96 & 13.38 \\
+
+DTFA (baseline)
+& 84.69 & 71.14 & 81.25 & 77.35 & 87.82 & 80.45 & 62.36 & 14.11 & 17.82 \\
+
+\textbf{DTFA + DBT (ours)}$^\dagger$
+& \textbf{84.99} & \textbf{72.34} & \textbf{81.65} & \textbf{78.05} & \textbf{88.12} & \textbf{81.03} & \textbf{63.06} & 14.11 & 17.82 \\
+
+\midrule
+
+$\Delta$ (Ours -- Baseline)
+& +0.30 & +1.20 & +0.40 & +0.70 & +0.30 & +0.58 & +0.70 & +0.00 & +0.00 \\
+
+\bottomrule
+
+\end{tabularx}
+
+\end{center}
+
+\vspace{-5pt}
+
+\textbf{Result Interpretation:}
+Because the deployed network is identical, any change in mAP can come only from the training signal; parameters (14.11\,M) and FLOPs (17.82\,G) are unchanged by construction. The projected gain is deliberately modest. DTFA already gains $+0.45$ over its best single teacher by fixed fusion, and DBT only re-weights the same two teachers, so its ceiling is bounded by how much of the $2.48$-point non-additivity stems from conflicting rather than redundant targets. The estimate becomes a result only once measured. Supporting evidence would be a gain that coincides with spatially varying trust ($\operatorname{std}(\alpha)>0$) and $\operatorname{corr}(\alpha,W)>0$ in the logged gate statistics, with the largest per-class gains on bicycle and motorbike as projected. The prepared ablations isolate each component: fixed fusion ($\alpha{=}0.5$), image-level gate, teachers-only gate, $+$student, $+W$, full DBT, and no severity supervision. If DBT does not improve on the baseline, the same statistics show whether the gate failed to specialise or specialised without benefit.
+
+\end{document}

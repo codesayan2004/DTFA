@@ -15,7 +15,7 @@ from utils.utils_bbox import decode_outputs, non_max_suppression
 class YOLO(object):
     _defaults = {
 
-        "model_path"        : '/hy-tmp/DTFA-main/logs/ep100-loss0.403-val_loss1.578.pth',
+        "model_path"        : os.environ.get('MODEL_PATH', 'model_data/AWD.pth'),
         "classes_path"      : 'model_data/classes.txt',
 
         "input_shape"       : [640, 640],
@@ -28,7 +28,7 @@ class YOLO(object):
 
         "letterbox_image"   : True,
 
-        "cuda"              : True,
+        "cuda"              : torch.cuda.is_available(),
     }
 
     @classmethod
